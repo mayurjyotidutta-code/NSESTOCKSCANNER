@@ -1,0 +1,2 @@
+# NSESTOCKSCANNER
+Stock scanner project
