@@ -1,0 +1,179 @@
+# NSE & BSE STOCK SCANNER
+# Version 1.0
+
+import pandas as pd
+import yfinance as yf
+from datetime import datetime
+
+# Official NSE Nifty 50 constituent list
+NIFTY50_URL = (
+    "https://nsearchives.nseindia.com/"
+    "content/indices/ind_nifty50list.csv"
+)
+
+# Additional major Indian companies.
+# Includes many Sensex companies and other large caps.
+EXTRA_STOCKS = [
+    "RELIANCE", "TCS", "INFY", "HDFCBANK",
+    "ICICIBANK", "SBIN", "BHARTIARTL",
+    "ITC", "LT", "AXISBANK", "KOTAKBANK",
+    "BAJFINANCE", "BAJAJFINSV", "MARUTI",
+    "M&M", "SUNPHARMA", "TITAN",
+    "HINDUNILVR", "NTPC", "POWERGRID",
+    "TATASTEEL", "JSWSTEEL", "ULTRACEMCO",
+    "ASIANPAINT", "NESTLEIND", "TECHM",
+    "HCLTECH", "INDUSINDBK", "BEL",
+    "TRENT", "ADANIENT", "ADANIPORTS",
+    "COALINDIA", "ONGC", "IOC", "BPCL",
+    "HINDALCO", "VEDL", "DLF", "DMART",
+    "PIDILITIND", "DIVISLAB", "DRREDDY",
+    "CIPLA", "EICHERMOT", "TVSMOTOR",
+    "GRASIM", "BANKBARODA", "PNB",
+    "CANBK", "IRCTC", "ZOMATO"
+]
+
+def get_stocks():
+
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+
+        response = __import__("requests").get(
+            NIFTY50_URL,
+            headers=headers,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        from io import StringIO
+        nifty = pd.read_csv(StringIO(response.text))
+
+        official_stocks = nifty["Symbol"].dropna().tolist()
+
+    except Exception as error:
+        print("Could not download official Nifty 50 list.")
+        print("Using backup watchlist:", error)
+        official_stocks = EXTRA_STOCKS[:]
+
+    stocks = sorted(set(official_stocks + EXTRA_STOCKS))
+
+    return stocks
+
+
+def scan_stock(symbol):
+
+    ticker = yf.Ticker(symbol + ".NS")
+
+    data = ticker.history(period="6mo", interval="1d")
+
+    if data.empty or len(data) < 30:
+        return None
+
+    close = data["Close"]
+
+    # Technical indicators
+    ema9 = close.ewm(span=9, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+
+    delta = close.diff()
+
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+
+    avg_gain = gain.ewm(
+        alpha=1/14,
+        min_periods=14,
+        adjust=False
+    ).mean()
+
+    avg_loss = loss.ewm(
+        alpha=1/14,
+        min_periods=14,
+        adjust=False
+    ).mean()
+
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    rsi = 100 - (100 / (1 + rs))
+
+    price = close.iloc[-1]
+    current_ema9 = ema9.iloc[-1]
+    current_ema26 = ema26.iloc[-1]
+    current_rsi = rsi.iloc[-1]
+
+    # Signal conditions
+    if current_ema9 > current_ema26 and current_rsi > 50:
+        signal = "BULLISH"
+
+    elif current_ema9 < current_ema26 and current_rsi < 50:
+        signal = "BEARISH"
+
+    else:
+        signal = "NEUTRAL"
+
+    return {
+        "Stock": symbol,
+        "Price": round(price, 2),
+        "EMA 9": round(current_ema9, 2),
+        "EMA 26": round(current_ema26, 2),
+        "RSI": round(current_rsi, 2),
+        "Signal": signal
+    }
+
+
+def main():
+
+    print("=" * 55)
+    print("          INDIAN STOCK MARKET SCANNER")
+    print("=" * 55)
+
+    print("Date:", datetime.now().strftime("%d-%m-%Y"))
+    print("Time:", datetime.now().strftime("%H:%M:%S"))
+
+    stocks = get_stocks()
+
+    print("\nTotal unique stocks:", len(stocks))
+    print("\nScanning stocks. Please wait...\n")
+
+    results = []
+
+    for stock in stocks:
+
+        try:
+            result = scan_stock(stock)
+
+            if result:
+                results.append(result)
+                print(
+                    stock,
+                    result["Signal"],
+                    "Price:", result["Price"],
+                    "RSI:", result["RSI"]
+                )
+
+        except Exception as error:
+            print("Skipped:", stock, error)
+
+    if results:
+
+        df = pd.DataFrame(results)
+
+        df.to_csv("scanner_results.csv", index=False)
+
+        print("\n========== SCANNER SUMMARY ==========")
+
+        print("\nBULLISH STOCKS:")
+        print(df[df["Signal"] == "BULLISH"]["Stock"].to_string(index=False))
+
+        print("\nBEARISH STOCKS:")
+        print(df[df["Signal"] == "BEARISH"]["Stock"].to_string(index=False))
+
+        print("\nResults saved to scanner_results.csv")
+
+    else:
+        print("No stock data available.")
+
+    print("\nScanner completed.")
+
+
+if __name__ == "__main__":
+    main()
